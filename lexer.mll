@@ -66,7 +66,10 @@ rule token = parse
 | chiffre as c {Tint (int_of_char c)}
 | entier_chiffres as i {Tint (int_of_string i)}
 | entier_caractere as c {Tint (int_of_char c.[1])}
-| entier as i {Tint (int_of_string i)}
+| "'\\" "t'" {Tint (int_of_char '\t')}
+| "'\\" "n'" {Tint (int_of_char '\n')}
+| "'\\" "''" {Tint (int_of_char '\'')}
+| "'\\" "\\'" {Tint (int_of_char '\\')}
 | _ {raise (Lexing_error "Caractère non reconnu")}
 
 and comment = parse
