@@ -3,7 +3,7 @@ TYPING_TESTS = ./tests/typing/
 EXEC_TESTS = ./tests/exec/
 FILENAME_TESTS = ./tests/filename/
 
-all: build clean	
+all: build	
 
 testSyntax: build
 	for b in $$(ls $(SYNTAX_TESTS)); do echo "\nSyntax tests, expected behavior: $$b" && for f in $$(ls $(SYNTAX_TESTS)$$b); do echo "\t$$f" && ./petitc --parse-only $(SYNTAX_TESTS)$$b/$$f; done; done 
