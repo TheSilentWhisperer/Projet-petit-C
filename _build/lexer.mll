@@ -61,7 +61,7 @@ rule token = parse
 | "&" {AMPERSAND}
 | "/*" {comment lexbuf}
 | "//" {line_comment lexbuf}
-| ident as i {Tident (Ident i)}
+| ident as i {Tident i}
 | entier as i {Tint (int_of_string i)}
 | _ {raise (Lexing_error "Lexème inconnu")}
 

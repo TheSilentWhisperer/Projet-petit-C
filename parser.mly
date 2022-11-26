@@ -35,12 +35,12 @@
 
 /*règles de production des non-terminaux*/
 fichier:
-| i = list(Tinclude) ; f = list(decl_fct) ; EOF { f }
+| i = list(Tinclude) ; f = list(decl_fct) ; EOF { {program_desc = f; program_loc = $startpos, $endpos} }
 ;
 
 
 decl_fct:
-| t = nt_type; i = Tident; LPAR; p = separated_list(COMMA,param); RPAR; b = bloc { {_type = t; ident = i; params = p; bloc = b} }
+| t = nt_type; i = Tident; LPAR; p = separated_list(COMMA,param); RPAR; b = bloc { {_type = t; ident = i; params = p; bloc = b; fct_loc = $startpos, $endpos} }
 ;
 
 nt_type:
@@ -61,30 +61,34 @@ decl_instr:
 ;
 
 decl_var:
-| t = nt_type; i = Tident; EQ; e = expr { (t,i,Some(e)) }
-| t = nt_type; i = Tident { (t,i,None) }
+| t = nt_type; i = Tident; EQ; e = expr { (t,i,Some(e),($startpos,$endpos)) }
+| t = nt_type; i = Tident { (t,i,None,($startpos,$endpos)) }
 ;
 
 expr:
-| i = Tint { {desc = Econst (Cint i); loc = $startpos, $endpos} }
-| TRUE { {desc = Econst (Cbool true); loc = $startpos, $endpos} }
-| FALSE { {desc = Econst (Cbool false); loc = $startpos, $endpos} }
-| NULL { {desc = NULL; loc = $startpos, $endpos} }
-| i = Tident { {desc = Evar i; loc = $startpos, $endpos} }
-| STAR; e = expr { {desc = Eunop (Indirection,e); loc = $startpos, $endpos} } %prec USTAR
-| e1 = expr; LBRACKET; e2 = expr; RBRACKET { {desc = Eunop (Indirection, {desc = Ebinop(Plus,e1,e2); loc = $startpos, $endpos}); loc = $startpos, $endpos} }
-| f = Tident ; LPAR; e = separated_list(COMMA,expr); RPAR { {desc = Ecall (f,e); loc = $startpos, $endpos} }
-| PLUSPLUS ; e = expr { {desc = Eunop (PreIncr,e); loc = $startpos, $endpos} }
-| MINUSMINUS ; e = expr { {desc = Eunop (PreDecr,e); loc = $startpos, $endpos} }
-| e = expr; PLUSPLUS { {desc = Eunop (PostIncr,e); loc = $startpos, $endpos} }
-| e = expr; MINUSMINUS { {desc = Eunop (PostDecr,e); loc = $startpos, $endpos} }
-| AMPERSAND; e = expr { {desc = Eunop (Address,e); loc = $startpos, $endpos} }
-| NOT; e = expr { {desc = Eunop (Not,e); loc = $startpos, $endpos} }
-| MINUS; e = expr { {desc = Eunop (UMinus,e); loc = $startpos, $endpos} } %prec UMINUS
-| PLUS; e = expr { {desc = Eunop (UPlus,e); loc = $startpos, $endpos} } %prec UPLUS
-| e1 = expr; binop = operateur; e2 = expr { {desc = Ebinop (binop,e1,e2); loc = $startpos, $endpos} }
-| SIZEOF; LPAR; t = nt_type; RPAR { {desc = Sizeof t; loc = $startpos, $endpos} }
-| LPAR; e = expr; RPAR; { e }
+| d = expr_desc { {expr_desc = d; expr_loc = $startpos, $endpos} }
+;
+
+expr_desc:
+| i = Tint { Econst (Cint i) }
+| TRUE { Econst (Cbool true) }
+| FALSE { Econst (Cbool false) }
+| NULL { NULL }
+| i = Tident { Evar i }
+| STAR; e = expr { Eunop (Indirection,e) } %prec USTAR
+| e1 = expr; LBRACKET; e2 = expr; RBRACKET { Eunop (Indirection, {expr_desc = Ebinop(Plus,e1,e2); expr_loc = $startpos, $endpos}) } 
+| f = Tident ; LPAR; e = separated_list(COMMA,expr); RPAR { Ecall (f,e) }
+| PLUSPLUS ; e = expr { Eunop (PreIncr,e) }
+| MINUSMINUS ; e = expr { Eunop (PreDecr,e) }
+| e = expr; PLUSPLUS { Eunop (PostIncr,e) }
+| e = expr; MINUSMINUS { Eunop (PostDecr,e) }
+| AMPERSAND; e = expr { Eunop (Address,e) }
+| NOT; e = expr { Eunop (Not,e) }
+| MINUS; e = expr { Eunop (UMinus,e) } %prec UMINUS
+| PLUS; e = expr { Eunop (UPlus,e) } %prec UPLUS
+| e1 = expr; binop = operateur; e2 = expr { Ebinop (binop,e1,e2) }
+| SIZEOF; LPAR; t = nt_type; RPAR { Sizeof t }
+| LPAR; e = expr; RPAR; { e.expr_desc }
 %inline operateur:
     | PLUS { Plus }
     | MINUS { Minus }
@@ -107,6 +111,9 @@ bloc:
 ;
 
 instruction:
+| d = instruction_desc { {instruction_desc = d; instruction_loc = $startpos, $endpos} }
+
+instruction_desc:
 | SEMICOLON { Iskip }
 | e = expr; SEMICOLON { Iexpr e }
 | IF; LPAR; e = expr; RPAR; i = instruction { Iif (e,i) } %prec IF

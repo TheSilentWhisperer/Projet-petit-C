@@ -1620,7 +1620,7 @@ let
 # 1621 "lexer.ml"
 = Lexing.sub_lexeme lexbuf lexbuf.Lexing.lex_start_pos lexbuf.Lexing.lex_curr_pos in
 # 64 "lexer.mll"
-             (Tident (Ident i))
+             (Tident i)
 # 1625 "lexer.ml"
 
   | 48 ->
