@@ -117,59 +117,32 @@ and texpr_desc =
 type fct_desc = 
 {
   return_type : _type;
-  args_types : _type list;
+  params_types : _type list;
 }
 
-module Expr_env = Map.Make(struct type t = ident let compare = compare end)
-module Func_env = Map.Make(struct type t = ident let compare = compare end)
+module Env = Map.Make(struct type t = ident let compare = compare end)
 
-type typing_env = {
-  expr_env : _type Expr_env.t;
-  func_env : fct_desc Func_env.t;
-}
+type type_or_func_desc = Type of _type | Func_desc of fct_desc  
 
-let empty_env = {
-  expr_env = Expr_env.empty;
-  func_env = Func_env.empty;
-}
-
-let f key m1 m2 = match m1, m2 with
-  | Some x, Some y -> Some x
-  | Some x, None -> Some x
-  | None, Some y -> Some y
-  | None, None -> None
-
-let union_env env1 env2 = {
-  expr_env = Expr_env.merge f env1.expr_env env2.expr_env;
-  func_env = Func_env.merge f env1.func_env env2.func_env;
-}
+type typing_env = type_or_func_desc Env.t
 
 let rec is_lvalue e = match e.expr_desc with
   | Evar _ | Eunop(Indirection, _) -> true 
   | _ -> false
 
 let rec compatibles t1 t2 = match t1, t2 with
-  | Void, Void -> true
-  | Int, Int -> true
-  | Bool, Bool -> true
-  | Pointer _, Pointer Void -> true
-  | Pointer Void, Pointer _ -> true
-  | Pointer t1, Pointer t2 -> egalite t1 t2
   | Int, Bool -> true
   | Bool, Int -> true
-  | _ -> false
-and egalite t1 t2 = match t1, t2 with
-  | Void, Void -> true
   | Int, Int -> true
   | Bool, Bool -> true
-  | Pointer t1, Pointer t2 -> egalite t1 t2
-  | _ -> false
-  
+  | Pointer Void, Pointer _ -> true
+  | t1, t2 when t1 = t2 -> true
+  | t1, t2 -> if compatibles t2 t1 then true else false
 
-let rec type_expr global local e = 
-  let d, ty = compute_type global local e in
+let rec type_expr env e = 
+  let d, ty = compute_type env e in
   { texpr_desc = d; typ = ty }
-and compute_type global local e = match e.expr_desc with
+and compute_type env e = match e.expr_desc with
   | NULL -> TNULL, Pointer Void
   | Econst c -> 
     begin
@@ -180,151 +153,159 @@ and compute_type global local e = match e.expr_desc with
   | Evar i -> 
     begin
       try
-        TEvar i, Expr_env.find i local.expr_env
-      with Not_found -> 
         begin 
-          try
-            let _ = TEvar i, Func_env.find i local.func_env in
-            raise (TypeError(e.expr_loc, "la fonction " ^ i ^ " est utilisée comme une variable"))
-          with Not_found -> 
-            begin 
-              try 
-                TEvar i, Expr_env.find i global.expr_env
-              with Not_found ->
-                begin 
-                  try
-                    let _ = TEvar i, Func_env.find i global.func_env in
-                    raise (TypeError(e.expr_loc, "la fonction " ^ i ^ " est utilisée comme une variable"))
-                  with Not_found ->
-                    raise (TypeError(e.expr_loc, "Variable " ^ i ^ " non déclarée"))
-                end
-            end
+          match Env.find i env with
+          | Type t -> TEvar i, t
+          | Func_desc _ -> raise (TypeError (e.expr_loc, i ^ " est une fonction mais une variable est attendue"))
         end
+      with 
+      | Not_found -> raise (TypeError (e.expr_loc, i ^ " n'est pas déclaré"))
+      | error -> raise error
     end
-  | Sizeof Void -> raise (TypeError (e.expr_loc, "le type void n'a pas de taille"))
-  | Sizeof t -> TSizeof t, Int
+  | Sizeof t ->
+    begin
+    if compatibles t Void then 
+      raise (TypeError (e.expr_loc, "sizeof(void) n'est pas défini"))
+    else
+      TSizeof t, Int
+    end
   | Eunop (op,e) ->
     begin 
       match op with 
       | Address -> 
         begin
-          if not (is_lvalue e) then 
-            raise (TypeError (e.expr_loc, "l'opérateur & doit être appliqué à une lvalue"));
-          let te = type_expr global local e in
-          TEunop (Address, te), Pointer te.typ
+          if is_lvalue e then 
+            let te = type_expr env e in 
+            TEunop (Address, te), Pointer te.typ
+          else
+            raise (TypeError (e.expr_loc, "l'opérateur unaire & n'accepte que des lvalue"))
         end 
       | Indirection ->
+        let te = type_expr env e in
         begin
-          let te = type_expr global local e in
           match te.typ with
-            | Pointer Void -> raise (TypeError (e.expr_loc, "un pointeur vers void ne peut pas être déréférencé"))
-            | Pointer t -> TEunop (Indirection, te), t
-            | _ -> raise (TypeError (e.expr_loc, "l'opérateur unaire * doit être appliqué à un pointeur"))
+          | Pointer t when compatibles t Void -> raise (TypeError (e.expr_loc, "l'opérateur unaire * n'accepte pas les pointeurs vers void "))
+          | Pointer t -> TEunop (Indirection, te), t
+          | _ -> raise (TypeError (e.expr_loc, "l'opérateur unaire * n'accepte que des pointeurs"))
         end
       | PreIncr | PreDecr | PostIncr | PostDecr ->
         begin
-          if not (is_lvalue e) then
-            raise (TypeError (e.expr_loc, "l'opérateur " ^ string_of_unop op ^ " n'accepte que des lvalue"));
-          let te = type_expr global local e in
-          TEunop (op, te), te.typ
+          if is_lvalue e then 
+            let te = type_expr env e in
+            TEunop (op, te), te.typ
+          else
+            raise (TypeError (e.expr_loc, "l'opérateur unaire " ^ string_of_unop op ^ " n'accepte que des lvalue"))
         end
       | UPlus | UMinus ->
+        let te = type_expr env e in
         begin
-          let te = type_expr global local e in
           match te.typ with
-            | t when compatibles t Int -> TEunop (op, te), Int
-            | _ -> raise (TypeError (e.expr_loc, "l'opérateur unaire " ^ string_of_unop op ^ " n'accepte que des entiers"))
+          | t when compatibles t Int -> TEunop (op, te), Int
+          | _ -> raise (TypeError (e.expr_loc, "l'opérateur unaire " ^ string_of_unop op ^ " n'accepte pas le type " ^ string_of_type te.typ))
         end
       | Not ->
+        let te = type_expr env e in
         begin
-          let te = type_expr global local e in
           match te.typ with
-            | Void -> raise (TypeError (e.expr_loc, "l'opérateur unaire " ^ string_of_unop op ^ " n'accepte pas le type void"))
+            | t when compatibles t Void -> raise (TypeError (e.expr_loc, "l'opérateur unaire " ^ string_of_unop op ^ " n'accepte pas le type void"))
             | t -> TEunop (op, te), Int
         end
     end
   | Ebinop (op, e1, e2) ->
-    begin 
+    begin   
       match op with
       | Assignement ->
         begin
-          if not (is_lvalue e1) then 
-            raise (TypeError (e.expr_loc, "l'opérateur = n'accepte que des lvalue comme opérande gauche"));
-          let te1 = type_expr global local e1 and te2 = type_expr global local e2 in
-          if not (compatibles te1.typ te2.typ) then 
-            raise (TypeError (e.expr_loc, "conversion implicite du type " ^ string_of_type te2.typ ^ " vers le type " ^ string_of_type te1.typ ^ " impossible"))
-          else TEbinop (Assignement, te1, te2), te1.typ
+          if is_lvalue e1 then
+            let te1 = type_expr env e1 and te2 = type_expr env e2 in
+            begin
+              if compatibles te1.typ te2.typ then
+                TEbinop (op, te1, te2), te1.typ
+              else
+                raise (TypeError (e.expr_loc, "conversion implicite du type " ^ string_of_type te2.typ ^ " vers le type " ^ string_of_type te1.typ ^ " impossible"))
+            end
+          else
+            raise (TypeError (e.expr_loc, "l'opérateur binaire " ^ string_of_binop op ^ " n'accepte que des lvalue"))
         end
       | Eq | Neq | Lt | Leq | Gt | Geq ->
+        let te1 = type_expr env e1 in
         begin 
-          let te1 = type_expr global local e1 and te2 = type_expr global local e2 in
-          if not (compatibles te1.typ te2.typ) then
-            raise (TypeError (e.expr_loc, "conversion implicite du type " ^ string_of_type te2.typ ^ " vers le type " ^ string_of_type te1.typ ^ " impossible"));
-          if te1.typ = Void then
-            raise (TypeError (e.expr_loc, "comparaison impossible avec le type void"));
-          TEbinop (op, te1, te2), Int
+          if compatibles te1.typ Void then
+            raise (TypeError (e.expr_loc, "l'opérateur binaire " ^ string_of_binop op ^ " n'accepte pas le type void"))
+          else
+            let te2 = type_expr env e2 in
+            begin 
+              if compatibles te1.typ te2.typ then
+                TEbinop (op, te1, te2), Int
+              else
+                raise (TypeError (e.expr_loc, "conversion implicite du type " ^ string_of_type te2.typ ^ " vers le type " ^ string_of_type te1.typ ^ " impossible"))
+            end
         end
-      | Mul | Div | Mod | Or | And -> 
+      | Mul | Div | Mod | Or | And ->  
+        let te1 = type_expr env e1 in
         begin 
-          let te1 = type_expr global local e1 and te2 = type_expr global local e2 in
-          if not (compatibles te1.typ te2.typ) then
-            raise (TypeError (e.expr_loc, "conversion implicite du type " ^ string_of_type te2.typ ^ " vers le type " ^ string_of_type te1.typ ^ " impossible"));
-          match te1.typ with
-            | t when not (compatibles t Int) -> raise (TypeError (e.expr_loc, "conversion implicite du type " ^ string_of_type t ^ " vers le type " ^ string_of_type Int ^ " impossible"))
-            | t when not (compatibles t te2.typ) -> raise (TypeError (e.expr_loc, "conversion implicite du type " ^ string_of_type te2.typ ^ " vers le type " ^ string_of_type t ^ " impossible"))
-            | t -> TEbinop (op, te1, te2), t
+          if compatibles te1.typ Int then 
+            let te2 = type_expr env e2 in
+            begin 
+              if compatibles te1.typ te2.typ then
+                TEbinop (op, te1, te2), Int
+              else
+                raise (TypeError (e.expr_loc, "conversion implicite du type " ^ string_of_type te2.typ ^ " vers le type " ^ string_of_type te1.typ ^ " impossible"))
+            end
+          else
+            raise (TypeError (e.expr_loc, "l'opérateur binaire " ^ string_of_binop op ^ " n'accepte pas le type " ^ string_of_type te1.typ))
         end
       | Plus ->
+        let te1 = type_expr env e1 and te2 = type_expr env e2 in
         begin
-          let te1 = type_expr global local e1 and te2 = type_expr global local e2 in
-          match te1.typ, te2.typ with
-            | Pointer t1, t2 when compatibles t2 Int -> TEbinop (Plus, te1, te2), Pointer t1
-            | t1, Pointer t2 when compatibles t1 Int -> TEbinop (Plus, te1, te2), Pointer t1
-            | t1, t2 when compatibles t1 Int && compatibles t2 Int -> TEbinop (Plus, te1, te2), Int
-            | _ -> raise (TypeError (e.expr_loc, "l'opérateur + n'accepte que des pointeurs et des entiers"))
+          match compatibles te1.typ Int, compatibles te2.typ Int with
+          | true, _ -> 
+            begin 
+              match te2.typ with
+              | t2 when compatibles t2 te1.typ -> TEbinop (Plus, te1, te2), Int
+              | Pointer t2 -> TEbinop (Plus, te2, te1), Pointer t2
+              | _ -> raise (TypeError (e.expr_loc, "impossible d'ajouter un entier à un type " ^ string_of_type te2.typ))
+            end
+          | _, true ->
+            begin 
+              match te1.typ with
+              | t1 when compatibles t1 te2.typ -> TEbinop (Plus, te2, te1), Int
+              | Pointer t1 -> TEbinop (Plus, te1, te2), Pointer t1
+              | _ -> raise (TypeError (e.expr_loc, "impossible d'ajouter un entier à un type " ^ string_of_type te1.typ))
+            end
+          | false, false ->
+            raise (TypeError (e.expr_loc, "Au moins une des deux opérandes de l'opérateur + doit être un entier"))
         end
       | Minus ->
+        let te1 = type_expr env e1 and te2 = type_expr env e2 in
         begin
-          let te1 = type_expr global local e1 and te2 = type_expr global local e2 in
           match te1.typ, te2.typ with
-            | t1, t2 when compatibles t1 Int && compatibles t2 Int -> TEbinop (Minus, te1, te2), Int
-            | Pointer t1, Pointer t2 when egalite t1 t2 -> TEbinop (Minus, te1, te2), Int
-            | _ -> raise (TypeError (e.expr_loc, "l'opérateur - n'accepte que des pointeurs et des entiers"))
+          | t1, t2 when compatibles t1 Int && compatibles t1 t2 -> TEbinop (Minus, te1, te2), Int
+          | Pointer t1, Pointer t2 when t1 = t2 -> TEbinop (Minus, te1, te2), Int
+          | _ -> raise (TypeError (e.expr_loc, "impossible de soustraire un type " ^ string_of_type te2.typ ^ " à un type " ^ string_of_type te1.typ))
         end
     end
   | Ecall (f, args) ->
     begin
-      let fdesc =
+      try
         begin 
-          try 
-            Func_env.find f local.func_env 
-          with Not_found -> 
-            begin
-              try
-                let _ = Expr_env.find f local.expr_env in
-                raise (TypeError (e.expr_loc, "l'identificateur " ^ f ^ " n'est pas une fonction"))
-              with Not_found ->
-                begin
-                  try
-                    Func_env.find f global.func_env
-                  with Not_found ->
-                    begin 
-                      try
-                        let _ = Expr_env.find f global.expr_env in
-                        raise (TypeError (e.expr_loc, "l'identificateur " ^ f ^ " n'est pas une fonction"))
-                      with Not_found ->
-                        raise (TypeError (e.expr_loc, "la fonction " ^ f ^ " n'est pas déclarée"))
-                    end
-                end
-            end 
-        end in
-      let targs = List.map (type_expr global local) args in 
-      if List.length targs != List.length fdesc.args_types then
-          raise (TypeError (e.expr_loc, "le nombre d'arguments de la fonction " ^ f ^ " est incorrect"));
-      List.iter2 (fun t te -> if not (compatibles t te.typ) then raise (TypeError (e.expr_loc, "un argument du type " ^ string_of_type t ^ " était attendu mais un argument du type " ^ string_of_type te.typ ^ " a été donné"))) fdesc.args_types targs;
-      TEcall (f, targs), fdesc.return_type 
+          match Env.find f env with
+          | Type _ -> raise (TypeError (e.expr_loc, "l'identificateur " ^ f ^ " est une variable mais une fonction était attendue"))
+          | Func_desc func_desc -> 
+            begin 
+              let targs = List.map (type_expr env) args in
+              if List.for_all2 (fun te t -> compatibles te.typ t) targs func_desc.params_types then
+                TEcall (f, targs), func_desc.return_type
+              else
+                raise (TypeError (e.expr_loc, "Les arguments passés à la fonction " ^ f ^ " ne sont pas compatibles avec les types attendus"))
+            end
+        end
+      with 
+      | Not_found -> raise (TypeError (e.expr_loc, "la fonction " ^ f ^ " n'est pas déclarée"))
+      | Invalid_argument _ -> raise (TypeError (e.expr_loc, "le nombre d'arguments passés à la fonction " ^ f ^ " est incorrect"))
+      | error -> raise error
     end
-  
+
 (*typage des instructions et des blocs*)
 
 type tdecl_var = _type * ident * texpr option
@@ -350,66 +331,80 @@ and tdecl_fct = {
 }
 and tbloc = tdecl_instr list
 
-let rec params_valid params = match params with
-  | [] -> true
-  | (t, i)::q -> not (List.exists (fun (_,qi) -> i = qi ) q) && params_valid q
+type tprogram = tdecl_fct list
 
-let rec program_valid program_desc = match program_desc with
+let rec contient_main program = match program.program_desc with
   | [] -> false
-  | f :: q when f.ident = "main" ->
+  | d :: q when d.ident = "main" ->
     begin
-      match f._type with
+      match d._type with
         | Int -> true
-        | _ -> raise (TypeError (f.fct_loc, "la fonction main doit retourner un entier"))
+        | _ -> raise (TypeError (d.fct_loc, "le type de retour de la fonction main doit être le type int"))
     end
-  | f :: q -> program_valid q
+  | d :: q -> contient_main { program_desc = q; program_loc = program.program_loc }
 
-let rec type_instruction global local return_type in_loop i = match i.instruction_desc with
+let rec type_instruction env return_type loop i = match i.instruction_desc with
   | Iskip -> TIskip
-  | Iexpr e -> TIexpr (type_expr global local e)
-  | Iif (e,i1) -> type_instruction global local return_type in_loop { i with instruction_desc = Iif_else (e, i1, { instruction_desc = Iskip; instruction_loc = i.instruction_loc }); }
-  | Iif_else (e,i1,i2) -> 
-    begin 
-      if compatibles (type_expr global local e).typ Void then
-        raise (TypeError (e.expr_loc, "la condition d'un if doit être de type booléen"));
-      TIif (type_expr global local e, type_instruction global local return_type in_loop i1, type_instruction global local return_type in_loop i2)
-    end
-  | Iwhile (e,s) ->
-    begin
-      let te = type_expr global local e in
-      if compatibles te.typ Void then raise (TypeError (e.expr_loc, "une condition booléenne était attendue"));
-      TIwhile (te, type_instruction global local return_type true s)
-    end
-  | Ifor (Some d, e, l, s) -> type_instruction global local return_type in_loop { i with instruction_desc = Ibloc([Decl_var d; Instruction {instruction_desc = Ifor (None, e, l, s); instruction_loc = i.instruction_loc}])}
-  | Ifor (None, None, l, i) -> type_instruction global local return_type in_loop { i with instruction_desc =  Ifor (None, Some ({expr_desc = Econst (Cbool true); expr_loc = i.instruction_loc}), l, i)}
-  | Ifor (None, Some e, l, i) ->
-    begin
-      if compatibles (type_expr global local e).typ Void then raise (TypeError (e.expr_loc, "une condition booléenne était attendue"));
-      TIfor (type_expr global local e, List.map (type_expr global local) l, type_instruction global local return_type true i)
-    end
-  | Ibloc b -> TIbloc (type_bloc (union_env global local) (empty_env) return_type in_loop b)
+  | Iexpr e -> TIexpr (type_expr env e)
   | Ireturn None -> 
     begin
-      if return_type != Void then raise (TypeError (i.instruction_loc, "une valeur de retour de type " ^ string_of_type return_type ^ " était attendue"));
-      TIreturn None
+      if return_type = Void then
+        TIreturn None
+      else
+        raise (TypeError (i.instruction_loc, "la fonction doit retourner un type " ^ string_of_type return_type))
     end
   | Ireturn (Some e) ->
+    let te = type_expr env e in
     begin
-      let te = type_expr global local e in
-      if not (compatibles te.typ return_type) then raise (TypeError (e.expr_loc, "une valeur de retour de type " ^ string_of_type return_type ^ " était attendue"));
-      TIreturn (Some te)
+      if compatibles te.typ return_type then
+        TIreturn (Some te)
+      else
+        raise (TypeError (i.instruction_loc, "la fonction doit retourner un type " ^ string_of_type return_type))
     end
-  | Ibreak -> 
-    begin match in_loop with
-      | true -> TIbreak
-      | false -> raise (TypeError (i.instruction_loc, "break doit être utilisé dans une boucle"))
+  | Iif (e,i1) -> type_instruction env return_type loop { i with instruction_desc = Iif_else (e, i1, { instruction_desc = Iskip; instruction_loc = i.instruction_loc }); }
+  | Iif_else (e,i1,i2) -> 
+    let te = type_expr env e in
+    begin 
+      if compatibles te.typ Void then
+        raise (TypeError (e.expr_loc, "la condition d'un if doit être compatible avec un booléen"));
+      TIif (te, type_instruction env return_type loop i1, type_instruction env return_type loop i2)
+    end
+  | Ibreak ->
+    begin
+      if loop then
+        TIbreak
+      else
+        raise (TypeError (i.instruction_loc, "break doit être utilisé dans une boucle"))
     end
   | Icontinue ->
-    begin match in_loop with
-      | true -> TIcontinue
-      | false -> raise (TypeError (i.instruction_loc, "continue doit être utilisé dans une boucle"))
+    begin
+      if loop then
+        TIcontinue
+      else
+        raise (TypeError (i.instruction_loc, "continue doit être utilisé dans une boucle"))
     end
-and type_bloc global (local : typing_env) return_type in_loop b = match b with
+  | Iwhile (e,i1) -> 
+    let te = type_expr env e in
+    begin 
+      if compatibles te.typ Void then 
+        raise (TypeError (e.expr_loc, "une condition booléenne était attendue"))
+      else
+        TIwhile (te, type_instruction env return_type true i1)
+    end
+  | Ifor (Some d, e, l, i1) -> type_instruction env return_type loop { i with instruction_desc = Ibloc([Decl_var d; Instruction {instruction_desc = Ifor (None, e, l, i1); instruction_loc = i.instruction_loc}])}
+  | Ifor (None, None, l, i1) -> type_instruction env return_type loop { i with instruction_desc =  Ifor (None, Some ({expr_desc = Econst (Cbool true); expr_loc = i.instruction_loc}), l, i1)}
+  | Ifor (None, Some e, l, i1) ->
+    let te = type_expr env e in
+    begin
+      if compatibles te.typ Void then 
+        raise (TypeError (e.expr_loc, "une condition booléenne était attendue"))
+      else
+        let tl = List.map (type_expr env) l in
+        TIfor (te, tl, type_instruction env return_type true i1)
+    end
+  | Ibloc b -> TIbloc (type_bloc env return_type loop b)
+
+and type_bloc env return_type loop b = match b with
   | [] -> []
   | Decl_var (t, i, None, loc)::b -> 
     begin
