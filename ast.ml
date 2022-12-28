@@ -12,7 +12,7 @@ type const = Cint of int | Cbool of bool
 (*Déclaration des opérateurs*)
 type unop = Not | PreIncr | PreDecr | PostIncr | PostDecr | Address | Indirection | UPlus | UMinus  
 
-type binop = Assignement | Or | And | Eq | Neq | Lt | Leq | Gt | Geq | Plus | Minus | Mul | Div | Mod
+type binop = Assignment | Or | And | Eq | Neq | Lt | Leq | Gt | Geq | Plus | Minus | Mul | Div | Mod
 
 (*Déclaration des expressions*)
 type expr = { 
@@ -51,10 +51,10 @@ and decl_instr =
   | Decl_var of decl_var
   | Instruction of instruction
 and decl_fct = {
-  _type : _type;
-  ident : ident;
-  params : (_type*ident) list;
-  bloc : bloc;
+  fct_return_type : _type;
+  fct_ident : ident;
+  fct_params : (_type*ident) list;
+  fct_bloc : bloc;
   fct_loc : loc; 
 }
 and bloc = decl_instr list
@@ -85,7 +85,7 @@ let string_of_unop = function
   | UMinus -> "-"
 
 let string_of_binop = function
-  | Assignement -> "="
+  | Assignment -> "="
   | Or -> "||"
   | And -> "&&"
   | Eq -> "=="
@@ -116,8 +116,8 @@ and texpr_desc =
 
 type fct_desc = 
 {
-  return_type : _type;
-  params_types : _type list;
+  fct_return_type : _type;
+  fct_params_types : _type list;
 }
 
 module Env = Map.Make(struct type t = ident let compare = compare end)
@@ -136,8 +136,9 @@ let rec compatibles t1 t2 = match t1, t2 with
   | Int, Int -> true
   | Bool, Bool -> true
   | Pointer Void, Pointer _ -> true
+  | Pointer _, Pointer Void -> true
   | t1, t2 when t1 = t2 -> true
-  | t1, t2 -> if compatibles t2 t1 then true else false
+  | _ -> false
 
 let rec type_expr env e = 
   let d, ty = compute_type env e in
@@ -158,9 +159,7 @@ and compute_type env e = match e.expr_desc with
           | Type t -> TEvar i, t
           | Func_desc _ -> raise (TypeError (e.expr_loc, i ^ " est une fonction mais une variable est attendue"))
         end
-      with 
-      | Not_found -> raise (TypeError (e.expr_loc, i ^ " n'est pas déclaré"))
-      | error -> raise error
+      with Not_found -> raise (TypeError (e.expr_loc, i ^ " n'est pas déclaré"))
     end
   | Sizeof t ->
     begin
@@ -214,7 +213,7 @@ and compute_type env e = match e.expr_desc with
   | Ebinop (op, e1, e2) ->
     begin   
       match op with
-      | Assignement ->
+      | Assignment ->
         begin
           if is_lvalue e1 then
             let te1 = type_expr env e1 and te2 = type_expr env e2 in
@@ -294,8 +293,8 @@ and compute_type env e = match e.expr_desc with
           | Func_desc func_desc -> 
             begin 
               let targs = List.map (type_expr env) args in
-              if List.for_all2 (fun te t -> compatibles te.typ t) targs func_desc.params_types then
-                TEcall (f, targs), func_desc.return_type
+              if List.for_all2 (fun te t -> compatibles te.typ t) targs func_desc.fct_params_types then
+                TEcall (f, targs), func_desc.fct_return_type
               else
                 raise (TypeError (e.expr_loc, "Les arguments passés à la fonction " ^ f ^ " ne sont pas compatibles avec les types attendus"))
             end
@@ -303,7 +302,6 @@ and compute_type env e = match e.expr_desc with
       with 
       | Not_found -> raise (TypeError (e.expr_loc, "la fonction " ^ f ^ " n'est pas déclarée"))
       | Invalid_argument _ -> raise (TypeError (e.expr_loc, "le nombre d'arguments passés à la fonction " ^ f ^ " est incorrect"))
-      | error -> raise error
     end
 
 (*typage des instructions et des blocs*)
@@ -322,26 +320,18 @@ and tinstruction =
 and tdecl_instr =
   | Tdecl_fct of tdecl_fct
   | Tdecl_var of tdecl_var
-  | TInstruction of tinstruction
+  | Tinstruction of tinstruction
 and tdecl_fct = {
-  t_type : _type;
-  tident : ident;
-  tparams : (_type * ident) list;
-  mutable tbloc : tbloc;
+  tfct_return_type : _type;
+  tfct_ident : ident;
+  tfct_params : (_type * ident) list;
+  mutable tfct_bloc : tbloc;
 }
 and tbloc = tdecl_instr list
 
 type tprogram = tdecl_fct list
 
-let rec contient_main program = match program.program_desc with
-  | [] -> false
-  | d :: q when d.ident = "main" ->
-    begin
-      match d._type with
-        | Int -> true
-        | _ -> raise (TypeError (d.fct_loc, "le type de retour de la fonction main doit être le type int"))
-    end
-  | d :: q -> contient_main { program_desc = q; program_loc = program.program_loc }
+module Local = Set.Make(struct type t = ident let compare = compare end)
 
 let rec type_instruction env return_type loop i = match i.instruction_desc with
   | Iskip -> TIskip
@@ -391,8 +381,8 @@ let rec type_instruction env return_type loop i = match i.instruction_desc with
       else
         TIwhile (te, type_instruction env return_type true i1)
     end
-  | Ifor (Some d, e, l, i1) -> type_instruction env return_type loop { i with instruction_desc = Ibloc([Decl_var d; Instruction {instruction_desc = Ifor (None, e, l, i1); instruction_loc = i.instruction_loc}])}
-  | Ifor (None, None, l, i1) -> type_instruction env return_type loop { i with instruction_desc =  Ifor (None, Some ({expr_desc = Econst (Cbool true); expr_loc = i.instruction_loc}), l, i1)}
+  | Ifor (Some d, eo, l, i1) -> type_instruction env return_type loop {i with instruction_desc = Ibloc [Decl_var d; Instruction {i with instruction_desc = Ifor (None, eo, l, i1)}]}
+  | Ifor (None, None, l, i1) -> type_instruction env return_type loop {i with instruction_desc = Ifor (None, Some ({expr_desc = Econst (Cbool true); expr_loc = i.instruction_loc}), l, i1)}
   | Ifor (None, Some e, l, i1) ->
     let te = type_expr env e in
     begin
@@ -402,46 +392,87 @@ let rec type_instruction env return_type loop i = match i.instruction_desc with
         let tl = List.map (type_expr env) l in
         TIfor (te, tl, type_instruction env return_type true i1)
     end
-  | Ibloc b -> TIbloc (type_bloc env return_type loop b)
+  | Ibloc b -> TIbloc (type_bloc env Local.empty return_type loop b)
 
-and type_bloc env return_type loop b = match b with
+and type_bloc env locally_used_idents return_type loop b = match b with
   | [] -> []
-  | Decl_var (t, i, None, loc)::b -> 
-    begin
-      if Expr_env.mem i local.expr_env then raise (TypeError (loc, "la variable " ^ i ^ " a déjà été déclarée"));
-      if Func_env.mem i local.func_env then raise (TypeError (loc, "les noms de variables et de fonctions ne peuvent pas être identiques au sein d'un même bloc"));
-      if compatibles t Void then raise (TypeError (loc, "les variables ne peuvent pas être de type void"));
-      let new_local = { local with expr_env = Expr_env.add i t local.expr_env } in
-      Tdecl_var (t, i, None) :: type_bloc global new_local return_type in_loop b
-    end
-  | Decl_var (t, i, Some e, loc)::b -> 
-    begin
-      if Expr_env.mem i local.expr_env then raise (TypeError (loc, "la variable " ^ i ^ " a déjà été déclarée"));
-      if Func_env.mem i local.func_env then raise (TypeError (loc, "les noms de variables et de fonctions ne peuvent pas être identiques au sein d'un même bloc"));
-      if compatibles t Void then raise (TypeError (loc, "les variables ne peuvent pas être de type void"));
-      let new_local = { local with expr_env = Expr_env.add i t local.expr_env } in
-      let te = type_expr global new_local e in
-      if not (compatibles te.typ t) then raise (TypeError (e.expr_loc, "conversion implicite du type " ^string_of_type te.typ ^ " vers le type " ^ string_of_type t ^ " impossible"));
-      Tdecl_var (t, i, Some te) :: type_bloc global new_local return_type in_loop b
-    end
-  | Instruction i::b -> TInstruction (type_instruction global local return_type in_loop i) :: type_bloc global local return_type in_loop b
-  | Decl_fct f :: b -> 
+  | Decl_var (t, i, None, loc) :: q -> 
     begin 
-      if Expr_env.mem f.ident local.expr_env then raise (TypeError (f.fct_loc, "les noms de variables et de fonctions ne peuvent pas être identiques au sein d'un même bloc"));
-      if Func_env.mem f.ident local.func_env then raise (TypeError (f.fct_loc, "la fonction " ^ f.ident ^ " a déjà été déclarée"));
-      if not (params_valid f.params) then raise (TypeError (f.fct_loc, "les paramètres d'une fonction doivent avoir des noms différents"));
-      let new_local = { local with func_env = Func_env.add f.ident {return_type = f._type ; args_types = List.map (fun (t,_) -> t) f.params} local.func_env} in
-      let bf = (List.map (fun (t,i) -> Decl_var (t,i,None,f.fct_loc)) f.params) @ f.bloc in
-      let tbf = type_bloc new_local empty_env f._type false bf in
-      let tb = type_bloc global new_local return_type in_loop b in
-      Tdecl_fct { t_type = f._type; tident = f.ident; tparams = f.params; tbloc = tbf } :: tb
+      if compatibles t Void then
+        raise (TypeError (loc, "le type d'une variable ne peut pas être void"))
+      else
+        begin 
+          if Local.mem i locally_used_idents then
+            raise (TypeError (loc, "la variable " ^ i ^ " est déjà déclarée dans ce bloc"))
+          else
+           Tdecl_var (t, i, None) :: type_bloc (Env.add i (Type t) env) (Local.add i locally_used_idents) return_type loop q
+        end
     end
+  | Decl_var (t, i, Some e, loc) :: q -> 
+    begin 
+      if compatibles t Void then
+        raise (TypeError (loc, "le type d'une variable ne peut pas être void"))
+      else
+        begin 
+          if Local.mem i locally_used_idents then
+            raise (TypeError (loc, "la variable " ^ i ^ " est déjà déclarée dans ce bloc"))
+          else
+            let te = type_expr env e in
+            begin
+              if compatibles te.typ t then
+                Tdecl_var (t, i, Some te) :: type_bloc (Env.add i (Type t) env) (Local.add i locally_used_idents) return_type loop q
+              else
+                raise (TypeError (loc, "le type de l'expression n'est pas compatible avec le type de la variable"))
+            end
+        end
+    end
+  | Decl_fct f :: q ->
+    begin
+      if Local.mem f.fct_ident locally_used_idents then
+        raise (TypeError (f.fct_loc, "la variable" ^ f.fct_ident ^ " est déjà déclarée dans ce bloc"))
+      else
+        let new_env = Env.add f.fct_ident (Func_desc { fct_return_type = f.fct_return_type; fct_params_types = List.map fst f.fct_params }) env in
+        let tbf = type_bloc new_env Local.empty f.fct_return_type loop (List.fold_left (fun acc (t, i) -> Decl_var (t, i, None, f.fct_loc) :: acc) f.fct_bloc f.fct_params) in
+        Tdecl_fct { tfct_return_type = f.fct_return_type; tfct_ident = f.fct_ident; tfct_params = f.fct_params; tfct_bloc = tbf } :: type_bloc new_env (Local.add f.fct_ident locally_used_idents) return_type loop q
+    end
+  | Instruction i :: q -> Tinstruction (type_instruction env return_type loop i) :: type_bloc env locally_used_idents return_type loop q
+
+  let rec contient_main program = match program.program_desc with
+  | [] -> false
+  | d :: q when d.fct_ident = "main" ->
+    begin
+      match d.fct_return_type with
+        | Int -> true
+        | _ -> raise (TypeError (d.fct_loc, "le type de retour de la fonction main doit être le type int"))
+    end
+  | d :: q -> contient_main { program_desc = q; program_loc = program.program_loc }
 
 let type_program p =
-  let local = { expr_env = Expr_env.empty; func_env = Func_env.empty } in
-  if not (program_valid p.program_desc) then raise (TypeError (p.program_loc, "une fonction main doit être déclarée"));  
-  let p_bloc = List.map (fun decl_fct -> Decl_fct decl_fct) p.program_desc in
-  let local = { local with func_env = Func_env.add "malloc" {return_type = Pointer Void; args_types = [Int]} local.func_env} in
-  let local = { local with func_env = Func_env.add "putchar" {return_type = Int; args_types = [Int]} local.func_env} in
-  type_bloc empty_env local Void false p_bloc;
-  
+  let starting_env = Env.empty in
+  let starting_env = Env.add "malloc" (Func_desc { fct_return_type = Pointer Void; fct_params_types = [Int] }) starting_env in
+  let starting_env = Env.add "putchar" (Func_desc { fct_return_type = Int; fct_params_types = [Int] }) starting_env in 
+  begin 
+    if contient_main p then
+      let program_bloc = List.map (fun f -> Decl_fct f) p.program_desc in
+      let tprogram_bloc = type_bloc starting_env (Local.add "putchar" (Local.singleton "malloc")) Void false program_bloc in
+      List.map (fun d -> match d with Tdecl_fct f -> f | _ -> exit 2) tprogram_bloc
+    else
+      raise (TypeError (p.program_loc, "le programme doit contenir une fonction main"))
+  end
+
+(*une position c'est un couple (profondeur, offset)*)
+type pile_pos = int*int
+
+type aexpr = { 
+  atyp : _type;
+  aexpr_desc : aexpr_desc;
+}
+and aexpr_desc =
+  | ANULL
+  | AEconst of const
+  | AEvar of pile_pos
+  | AEunop of unop * aexpr
+  | ASizeof of _type
+  | AEbinop of binop * aexpr * aexpr
+  | AEcall of ident * aexpr list
+

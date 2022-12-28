@@ -1,5 +1,6 @@
 open Format
 open Lexing
+open X86_64
 
 (*options de compilation*)
 let parse_only = ref false
@@ -61,6 +62,16 @@ let compile filename =
             let typed_ast = Ast.type_program ast in
             (*Si l'option --type-only est activée, s'arrêter après le typage*)
             if !type_only then exit 0;
+            (*Sinon, effectuer la compilation*)
+            let code = List.fold_left (fun acc f -> Pdc.compile_fct f ++ acc) nop typed_ast in
+            let destination_filenmame = (Filename.chop_suffix filename ".c") ^ ".s" in
+            let f = open_out destination_filenmame in
+            let fmt = formatter_of_out_channel f in
+            X86_64.print_program fmt {text = code; data = []};
+            (* on "flush" le buffer afin de s'assurer que tout y a été écrit
+              avant de le fermer *)
+            fprintf fmt "@?";
+            close_out f
           with 
             | Ast.TypeError (loc,msg) -> 
                 localise loc filename;

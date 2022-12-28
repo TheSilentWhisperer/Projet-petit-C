@@ -40,7 +40,7 @@ fichier:
 
 
 decl_fct:
-| t = nt_type; i = Tident; LPAR; p = separated_list(COMMA,param); RPAR; b = bloc { {_type = t; ident = i; params = p; bloc = b; fct_loc = $startpos, $endpos} }
+| t = nt_type; i = Tident; LPAR; p = separated_list(COMMA,param); RPAR; b = bloc { {fct_return_type = t; fct_ident = i; fct_params = p; fct_bloc = b; fct_loc = $startpos, $endpos} }
 ;
 
 nt_type:
