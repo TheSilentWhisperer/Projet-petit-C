@@ -307,7 +307,8 @@ and compute_type env e = match e.expr_desc with
 (*typage des instructions et des blocs*)
 
 type tdecl_var = _type * ident * texpr option
-and tinstruction = 
+
+type tinstruction = 
   | TIskip
   | TIexpr of texpr
   | TIif of texpr * tinstruction * tinstruction
@@ -461,7 +462,8 @@ let type_program p =
   end
 
 (*une position c'est un couple (profondeur, offset)*)
-type pile_pos = int*int
+type var_pos = int*int
+
 
 type aexpr = { 
   atyp : _type;
@@ -470,9 +472,32 @@ type aexpr = {
 and aexpr_desc =
   | ANULL
   | AEconst of const
-  | AEvar of pile_pos
+  | AEvar of var_pos
   | AEunop of unop * aexpr
   | ASizeof of _type
   | AEbinop of binop * aexpr * aexpr
-  | AEcall of ident * aexpr list
+  | AEcall of (ident * int) * aexpr list
 
+type adecl_var = _type * ident * aexpr option
+
+type ainstruction =
+  | AIskip
+  | AIexpr of aexpr
+  | AIif of aexpr * ainstruction * ainstruction
+  | AIwhile of aexpr * ainstruction
+  | AIfor of aexpr * aexpr list * ainstruction
+  | AIbloc of abloc
+  | AIreturn of aexpr option
+  | AIbreak 
+  | AIcontinue 
+and adecl_instr = 
+  | Adecl_fct of adecl_fct
+  | Adecl_var of adecl_var
+  | Ainstruction of ainstruction
+and adecl_fct = {
+  afct_ident : ident;
+  afct_bloc : abloc;
+}
+and abloc = adecl_instr list
+
+type aprogram = adecl_fct list
