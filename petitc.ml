@@ -62,12 +62,14 @@ let compile filename =
             let typed_ast = Ast.type_program ast in
             (*Si l'option --type-only est activée, s'arrêter après le typage*)
             if !type_only then exit 0;
-            (*Sinon, effectuer la compilation*)
-            let code = List.fold_left (fun acc f -> Pdc.compile_fct f ++ acc) nop typed_ast in
+            (*Sinon, effectuer l'allocation puis la compilation*)
+            let allocated_ast = Pdc.allocate_program typed_ast in
+            let code = Pdc.compile_program allocated_ast in
+            (*Enregistrer le code assembleur dans un fichier*)
             let destination_filenmame = (Filename.chop_suffix filename ".c") ^ ".s" in
             let f = open_out destination_filenmame in
             let fmt = formatter_of_out_channel f in
-            X86_64.print_program fmt {text = code; data = []};
+            X86_64.print_program fmt code;
             (* on "flush" le buffer afin de s'assurer que tout y a été écrit
               avant de le fermer *)
             fprintf fmt "@?";
@@ -77,6 +79,9 @@ let compile filename =
                 localise loc filename;
                 eprintf "Erreur lors du typage : %s. \n" msg;
                 exit 1
+            | Pdc.Error (msg) ->
+                eprintf "Erreur lors de la production de code : %s. \n" msg;
+                exit 2
         end
       with 
         | Lexer.Lexing_error msg -> 

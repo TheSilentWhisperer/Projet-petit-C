@@ -12,3 +12,7 @@ build:
 clean:
 	ocamlbuild -clean
 	rm -f petitc
+	rm -f a.out
+	rm -f out
+
+.PHONY: build clean

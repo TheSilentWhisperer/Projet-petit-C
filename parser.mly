@@ -97,7 +97,7 @@ expr_desc:
     | MOD { Mod }
     | AND { And }
     | OR { Or }
-    | EQ { Assignement }
+    | EQ { Assignment }
     | NEQ { Neq }
     | LT { Lt }
     | LEQ { Leq }

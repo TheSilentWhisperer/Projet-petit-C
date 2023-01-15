@@ -461,9 +461,8 @@ let type_program p =
       raise (TypeError (p.program_loc, "le programme doit contenir une fonction main"))
   end
 
-(*une position c'est un couple (profondeur, offset)*)
-type var_pos = int*int
-
+type depth = int
+type offset = int
 
 type aexpr = { 
   atyp : _type;
@@ -472,13 +471,13 @@ type aexpr = {
 and aexpr_desc =
   | ANULL
   | AEconst of const
-  | AEvar of var_pos
+  | AEvar of depth * offset
   | AEunop of unop * aexpr
   | ASizeof of _type
   | AEbinop of binop * aexpr * aexpr
-  | AEcall of (ident * int) * aexpr list
+  | AEcall of ident * depth * aexpr list
 
-type adecl_var = _type * ident * aexpr option
+type adecl_var = depth * offset * aexpr option
 
 type ainstruction =
   | AIskip
@@ -496,6 +495,7 @@ and adecl_instr =
   | Ainstruction of ainstruction
 and adecl_fct = {
   afct_ident : ident;
+  afct_frame_size: int;
   afct_bloc : abloc;
 }
 and abloc = adecl_instr list
